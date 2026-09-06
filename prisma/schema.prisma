@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 임직원 명단 (관리자가 관리)
+enum EmployeeType {
+  INTERNAL // 내부 주차장 배정자
+  EXTERNAL // 외부 주차장 배정자
+  WAITING  // 대기자
+}
+
+model Employee {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  type      EmployeeType
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  // 내부 배정자인 경우 본인 소유 주차면
+  ownedSpot ParkingSpot? @relation("SpotOwner")
+
+  // 내부 배정자가 등록한 빈 자리들
+  vacancies Vacancy[]    @relation("VacancyOwner")
+
+  // 신청 내역
+  requests  Request[]    @relation("RequestApplicant")
+}
+
+// 주차면 (도면 상의 개별 자리)
+model ParkingSpot {
+  id        String    @id @default(cuid())
+  label     String    @unique // 예: "A-01", "B-12" - 도면과 매핑되는 코드
+  zone      String    // "internal" | "external" - 내부/외부 주차장 구분
+  ownerId   String?   @unique
+  owner     Employee? @relation("SpotOwner", fields: [ownerId], references: [id])
+
+  vacancies Vacancy[]
+}
+
+// 특정 날짜에 특정 자리가 비어있다는 등록
+model Vacancy {
+  id        String   @id @default(cuid())
+  spotId    String
+  spot      ParkingSpot @relation(fields: [spotId], references: [id])
+  ownerId   String
+  owner     Employee @relation("VacancyOwner", fields: [ownerId], references: [id])
+  date      DateTime // 날짜만 사용 (시간 00:00 고정)
+  createdAt DateTime @default(now())
+
+  requests  Request[]
+
+  @@unique([spotId, date]) // 같은 자리, 같은 날짜에 중복 등록 방지
+}
+
+// 빈 자리에 대한 신청
+model Request {
+  id            String   @id @default(cuid())
+  vacancyId     String
+  vacancy       Vacancy  @relation(fields: [vacancyId], references: [id])
+  applicantId   String
+  applicant     Employee @relation("RequestApplicant", fields: [applicantId], references: [id])
+  createdAt     DateTime @default(now()) // 선착순 판단 기준 시각
+  status        RequestStatus @default(PENDING)
+
+  @@unique([vacancyId, applicantId]) // 같은 사람이 같은 자리 중복 신청 방지
+}
+
+enum RequestStatus {
+  PENDING   // 마감 전, 접수만 된 상태
+  CONFIRMED // 마감 후 배정 확정
+  REJECTED  // 마감 후 배정 실패 (우선순위 밀림)
+}
