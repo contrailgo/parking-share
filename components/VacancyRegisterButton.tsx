@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { findEmployeeByName, LotId } from "@/lib/mockRoster";
+import type { LotId } from "@/lib/mockRoster";
+import { useRoster } from "@/lib/RosterContext";
 
 type Props = {
   defaultDate: string;
@@ -49,6 +50,7 @@ export default function VacancyRegisterButton({
   const [startDate, setStartDate] = useState(defaultDate);
   const [endDate, setEndDate] = useState(defaultDate);
   const [error, setError] = useState<string | null>(null);
+  const { findEmployeeByName } = useRoster();
 
   function openModal() {
     setStartDate(defaultDate);

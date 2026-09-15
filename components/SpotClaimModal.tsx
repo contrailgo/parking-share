@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { findEmployeeByName } from "@/lib/mockRoster";
+import { useRoster } from "@/lib/RosterContext";
 
 type Props = {
   date: string;
@@ -26,6 +26,7 @@ export default function SpotClaimModal({
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const { findEmployeeByName } = useRoster();
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

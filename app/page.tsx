@@ -6,6 +6,8 @@ import LobbyFloorPlan from "@/components/LobbyFloorPlan";
 import VacancyRegisterButton from "@/components/VacancyRegisterButton";
 import SpotClaimModal from "@/components/SpotClaimModal";
 import CancelModal from "@/components/CancelModal";
+import AdminModeButton from "@/components/AdminModeButton";
+import AdminCancelConfirmModal from "@/components/AdminCancelConfirmModal";
 import type { LotId } from "@/lib/mockRoster";
 import { isWaitingOverrideAllowed } from "@/lib/deadline";
 
@@ -21,6 +23,17 @@ type LotState<T> = Record<LotId, Record<string, Record<number, T>>>;
 function todayString() {
   const d = new Date();
   return d.toISOString().split("T")[0];
+}
+
+// 로컬 타임존 변환(toISOString 등)을 거치면 하루씩 밀리는 문제가 있어서
+// 날짜를 직접 파싱해서 UTC 기준 정수 연산으로만 하루 이동시킴
+function shiftDate(dateStr: string, deltaDays: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const shifted = new Date(Date.UTC(y, m - 1, d) + deltaDays * 24 * 60 * 60 * 1000);
+  const yyyy = shifted.getUTCFullYear();
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 const EMPTY_LOT_STATE = { basement: {}, lobby: {} };
@@ -56,6 +69,10 @@ export default function Home() {
   >(null);
   const [cancelMode, setCancelMode] = useState(false);
   const [cancelSpot, setCancelSpot] = useState<
+    { lot: LotId; spotNumber: number } | null
+  >(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminCancelSpot, setAdminCancelSpot] = useState<
     { lot: LotId; spotNumber: number } | null
   >(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -258,7 +275,34 @@ export default function Home() {
     return { success: false, error: "취소할 수 있는 자리가 아닙니다" };
   }
 
+  // 관리자 모드: 비밀번호 확인 없이 등록/신청 전부 취소 가능
+  function handleAdminCancel() {
+    if (!adminCancelSpot) return;
+    const { lot, spotNumber } = adminCancelSpot;
+    const status = statusesByLot[lot][date]?.[spotNumber];
+
+    if (status === "claimed_external" || status === "claimed_waiting") {
+      setSpotStatus(lot, date, spotNumber, "vacant");
+      clearClaim(lot, date, spotNumber);
+      setToast(
+        `[관리자] ${spotNumber}번 (${date}) 신청이 취소되어 다시 빈자리가 됐어요.`
+      );
+    } else if (status === "vacant") {
+      clearVacancy(lot, date, spotNumber);
+      setToast(`[관리자] ${spotNumber}번 (${date}) 빈자리 등록이 취소됐어요.`);
+    }
+    setAdminCancelSpot(null);
+  }
+
   function handleSpotClick(lot: LotId, spotNumber: number) {
+    if (isAdmin) {
+      const status = statusesByLot[lot][date]?.[spotNumber];
+      if (status !== undefined) {
+        setAdminCancelSpot({ lot, spotNumber });
+      }
+      return;
+    }
+
     if (cancelMode) {
       setCancelSpot({ lot, spotNumber });
       return;
@@ -277,7 +321,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen p-8 max-w-[1400px] mx-auto">
+    <main className="min-h-screen p-8 max-w-[1700px] mx-auto">
       <div className="flex items-center gap-4 mb-10">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo.png" alt="GE HealthCare" className="h-12 w-auto" />
@@ -289,6 +333,14 @@ export default function Home() {
           <label htmlFor="date" className="text-sm font-medium text-gray-700">
             날짜 선택
           </label>
+          <button
+            type="button"
+            onClick={() => setDate((d) => shiftDate(d, -1))}
+            aria-label="전날로 이동"
+            className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+          >
+            ‹
+          </button>
           <input
             id="date"
             type="date"
@@ -296,9 +348,22 @@ export default function Home() {
             onChange={(e) => setDate(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900 font-mono-numeric"
           />
+          <button
+            type="button"
+            onClick={() => setDate((d) => shiftDate(d, 1))}
+            aria-label="다음날로 이동"
+            className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+          >
+            ›
+          </button>
           {cancelMode && (
             <span className="text-sm text-[#6022A7] font-medium">
               취소 모드 — 취소할 자리(초록/파랑/보라)를 클릭하세요
+            </span>
+          )}
+          {isAdmin && (
+            <span className="text-sm text-gray-900 font-medium">
+              관리자 모드 — 등록/신청된 자리를 클릭하면 바로 취소할 수 있어요
             </span>
           )}
         </div>
@@ -320,6 +385,7 @@ export default function Home() {
           >
             {cancelMode ? "취소 모드 끄기" : "등록/신청 취소"}
           </button>
+          <AdminModeButton isAdmin={isAdmin} onChange={setIsAdmin} />
         </div>
       </div>
 
@@ -336,7 +402,7 @@ export default function Home() {
               date={date}
               spotStatuses={statusesFor("basement")}
               spotNames={namesFor("basement")}
-              cancelMode={cancelMode}
+              cancelMode={cancelMode || isAdmin}
               overrideAllowed={isWaitingOverrideAllowed(date)}
               onSpotClick={(spotNumber) => handleSpotClick("basement", spotNumber)}
             />
@@ -355,11 +421,73 @@ export default function Home() {
               date={date}
               spotStatuses={statusesFor("lobby")}
               spotNames={namesFor("lobby")}
-              cancelMode={cancelMode}
+              cancelMode={cancelMode || isAdmin}
               overrideAllowed={isWaitingOverrideAllowed(date)}
               onSpotClick={(spotNumber) => handleSpotClick("lobby", spotNumber)}
             />
           </div>
+        </div>
+      </div>
+
+      {/* 두 지도 공통 범례 - 하단 중앙에 작은 박스 하나만, 한 줄로 고정 */}
+      <div className="mt-6" style={{ display: "flex", justifyContent: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            flexWrap: "nowrap",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "2.5rem",
+            whiteSpace: "nowrap",
+            fontSize: "0.75rem",
+            color: "#6b7280",
+            backgroundColor: "#ffffff",
+            border: "1px solid #e5e7eb",
+            borderRadius: "9999px",
+            padding: "0.625rem 2rem",
+            boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+          }}
+        >
+          <span style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "0.375rem", whiteSpace: "nowrap" }}>
+            <span
+              style={{
+                width: "0.75rem",
+                height: "0.75rem",
+                borderRadius: "0.125rem",
+                backgroundColor: "#8b5cf6",
+                display: "inline-block",
+                flexShrink: 0,
+              }}
+            />
+            대기자 신청
+          </span>
+          <span style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "0.375rem", whiteSpace: "nowrap" }}>
+            <span
+              style={{
+                width: "0.75rem",
+                height: "0.75rem",
+                borderRadius: "0.125rem",
+                backgroundColor: "#2563eb",
+                display: "inline-block",
+                flexShrink: 0,
+              }}
+            />
+            외부 배정자 신청
+          </span>
+          <span style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "0.375rem", whiteSpace: "nowrap" }}>
+            <span
+              style={{
+                width: "0.75rem",
+                height: "0.75rem",
+                borderRadius: "0.125rem",
+                backgroundColor: "#10b981",
+                display: "inline-block",
+                flexShrink: 0,
+              }}
+            />
+            빈자리
+          </span>
         </div>
       </div>
 
@@ -382,6 +510,15 @@ export default function Home() {
           spotNumber={cancelSpot.spotNumber}
           onClose={() => setCancelSpot(null)}
           onCancel={handleCancel}
+        />
+      )}
+
+      {adminCancelSpot !== null && (
+        <AdminCancelConfirmModal
+          date={date}
+          spotNumber={adminCancelSpot.spotNumber}
+          onClose={() => setAdminCancelSpot(null)}
+          onConfirm={handleAdminCancel}
         />
       )}
 

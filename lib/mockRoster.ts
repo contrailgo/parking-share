@@ -1,7 +1,7 @@
-// 실제 명단 반영 (주차장_배정_2025년_하반기_-_추첨_결과_2025-06-27.xlsx 기준)
+// 기본(폴백) 명단 - 실제 회사 명단 파일(2025-06-27 기준)을 하드코딩해둔 것.
+// 이제는 "엑셀 업로드"로 실시간 교체 가능해졌고, 이 값은 업로드 전 초기 상태로만 쓰임.
 // 신관(내부, 43명) / 외부(50명) / 대기(4명, 05~15는 빈 슬롯이라 제외)
-// + 로비 주차장(내부, 19명) - 실제 이름 대신 순번(1~19)으로 임시 처리
-// TODO: DB 연결 시 Prisma seed로 이전
+// + 로비 주차장(내부, 19명) - 실제 이름 대신 순번(1~19)으로 임시 처리 (엑셀에 로비 정보 없음)
 
 export type EmployeeType = "INTERNAL" | "EXTERNAL" | "WAITING";
 export type LotId = "basement" | "lobby";
@@ -92,13 +92,20 @@ const WAITING_ROSTER: Employee[] = [
   // 대기 05~15는 현재 빈 슬롯이라 명단 없음
 ];
 
-export const MOCK_ROSTER: Employee[] = [
+export const DEFAULT_ROSTER: Employee[] = [
   ...INTERNAL_ROSTER,
   ...LOBBY_INTERNAL_ROSTER,
   ...EXTERNAL_ROSTER,
   ...WAITING_ROSTER,
 ];
 
-export function findEmployeeByName(name: string): Employee | undefined {
-  return MOCK_ROSTER.find((e) => e.name === name.trim());
+// 로비 명단만 따로 export - 엑셀 업로드는 로비 정보를 안 주니까,
+// 새로 파싱한 신관/외부/대기 명단에 이걸 항상 이어붙여야 함
+export const LOBBY_ROSTER = LOBBY_INTERNAL_ROSTER;
+
+export function findEmployeeInRoster(
+  roster: Employee[],
+  name: string
+): Employee | undefined {
+  return roster.find((e) => e.name === name.trim());
 }
