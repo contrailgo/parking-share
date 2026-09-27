@@ -1,48 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import type { LotId } from "@/lib/mockRoster";
-import { useRoster } from "@/lib/RosterContext";
 
 type Props = {
   defaultDate: string;
-  isSpotRegistered: (spotNumber: number, date: string, lot: LotId) => boolean;
-  onRegister: (
-    spotNumber: number,
-    name: string,
-    dates: string[],
-    pin: string,
-    lot: LotId
-  ) => void;
+  onRegistered: () => void; // 성공 시 부모가 자리 목록을 다시 불러오도록 알림
 };
-
-const MAX_RANGE_DAYS = 90;
-
-function enumerateDates(start: string, end: string): string[] {
-  // 로컬 타임존 변환(toISOString 등)을 거치면 UTC+9 등에서 하루씩 밀리는 문제가 있어서
-  // 날짜를 직접 파싱해서 UTC 기준 정수 연산으로만 처리함 (종료일 포함, inclusive)
-  const result: string[] = [];
-  const [sy, sm, sd] = start.split("-").map(Number);
-  const [ey, em, ed] = end.split("-").map(Number);
-  let cur = Date.UTC(sy, sm - 1, sd);
-  const endUTC = Date.UTC(ey, em - 1, ed);
-
-  while (cur <= endUTC) {
-    const d = new Date(cur);
-    const yyyy = d.getUTCFullYear();
-    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const dd = String(d.getUTCDate()).padStart(2, "0");
-    result.push(`${yyyy}-${mm}-${dd}`);
-    cur += 24 * 60 * 60 * 1000; // 하루씩 증가 (UTC 기준이라 DST 영향 없음)
-  }
-
-  return result;
-}
 
 export default function VacancyRegisterButton({
   defaultDate,
-  isSpotRegistered,
-  onRegister,
+  onRegistered,
 }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [name, setName] = useState("");
@@ -50,9 +17,12 @@ export default function VacancyRegisterButton({
   const [startDate, setStartDate] = useState(defaultDate);
   const [endDate, setEndDate] = useState(defaultDate);
   const [error, setError] = useState<string | null>(null);
-  const { findEmployeeByName } = useRoster();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   function openModal() {
+    setName("");
+    setPin("");
+    setError(null);
     setStartDate(defaultDate);
     setEndDate(defaultDate);
     setIsOpen(true);
@@ -65,65 +35,36 @@ export default function VacancyRegisterButton({
     setError(null);
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
+    setIsSubmitting(true);
 
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError("이름을 입력해 주십시오");
-      return;
+    try {
+      const res = await fetch("/api/spots/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          pin,
+          startDate,
+          endDate,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "등록에 실패했습니다");
+        return;
+      }
+
+      onRegistered();
+      closeModal();
+    } catch {
+      setError("서버와 통신 중 오류가 발생했습니다");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    if (!/^\d{4}$/.test(pin)) {
-      setError("비밀번호는 숫자 4자리로 입력해 주십시오");
-      return;
-    }
-
-    if (!startDate || !endDate) {
-      setError("시작일과 종료일을 모두 선택해 주십시오");
-      return;
-    }
-
-    if (endDate < startDate) {
-      setError("종료일은 시작일보다 빠를 수 없습니다");
-      return;
-    }
-
-    const dates = enumerateDates(startDate, endDate);
-
-    if (dates.length > MAX_RANGE_DAYS) {
-      setError(`한 번에 최대 ${MAX_RANGE_DAYS}일까지 등록할 수 있습니다`);
-      return;
-    }
-
-    const employee = findEmployeeByName(trimmed);
-
-    if (!employee) {
-      setError("명단에 없는 이름입니다");
-      return;
-    }
-
-    if (employee.type !== "INTERNAL" || employee.spotNumber === undefined) {
-      setError("내부 배정자만 자리를 등록할 수 있습니다");
-      return;
-    }
-
-    const lot: LotId = employee.lot ?? "basement";
-    const lotLabel = lot === "lobby" ? "로비" : "신관";
-
-    const conflictDate = dates.find((d) =>
-      isSpotRegistered(employee.spotNumber as number, d, lot)
-    );
-
-    if (conflictDate) {
-      setError(
-        `이미 ${conflictDate}에 등록된 자리입니다 (${lotLabel} ${employee.spotNumber}번)`
-      );
-      return;
-    }
-
-    onRegister(employee.spotNumber, employee.name, dates, pin, lot);
-    closeModal();
   }
 
   return (
@@ -146,7 +87,7 @@ export default function VacancyRegisterButton({
               자리를 비우려는 기간과 이름을 입력해 주십시오.
             </p>
 
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={handleSubmit} autoComplete="off">
               <div className="flex gap-2 mb-2">
                 <div className="flex-1">
                   <label className="block text-xs text-gray-500 mb-1">
@@ -181,17 +122,23 @@ export default function VacancyRegisterButton({
               <input
                 autoFocus
                 type="text"
+                name="vacancy-register-name"
                 value={name}
                 onChange={(e) => {
                   setName(e.target.value);
                   setError(null);
                 }}
                 placeholder="이름"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#6022A7]"
               />
 
               <input
                 type="password"
+                name="vacancy-register-pin"
                 inputMode="numeric"
                 maxLength={4}
                 value={pin}
@@ -199,13 +146,12 @@ export default function VacancyRegisterButton({
                   setPin(e.target.value.replace(/\D/g, "").slice(0, 4));
                   setError(null);
                 }}
-                placeholder="비밀번호 4자리 (취소할 때 필요해요)"
+                placeholder="비밀번호 설정(4자리)"
+                autoComplete="new-password"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#6022A7]"
               />
 
-              {error && (
-                <p className="text-sm text-red-600 mb-2">{error}</p>
-              )}
+              {error && <p className="text-sm text-red-600 mb-2">{error}</p>}
 
               <div className="flex gap-2 mt-4">
                 <button
@@ -217,9 +163,10 @@ export default function VacancyRegisterButton({
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 rounded-lg bg-[#6022A7] hover:bg-[#4f1c89] text-white text-sm font-medium"
+                  disabled={isSubmitting}
+                  className="flex-1 px-4 py-2 rounded-lg bg-[#6022A7] hover:bg-[#4f1c89] text-white text-sm font-medium disabled:opacity-50"
                 >
-                  등록
+                  {isSubmitting ? "등록 중..." : "등록"}
                 </button>
               </div>
             </form>

@@ -2,7 +2,6 @@
 
 import { useRef, useState } from "react";
 import { parseRosterExcel } from "@/lib/parseRosterExcel";
-import { useRoster } from "@/lib/RosterContext";
 
 export default function RosterUploadButton({
   onResult,
@@ -10,12 +9,11 @@ export default function RosterUploadButton({
   onResult: (message: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const { replaceRoster } = useRoster();
   const [isLoading, setIsLoading] = useState(false);
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    e.target.value = ""; // 같은 파일 다시 선택해도 onChange 다시 뜨게
+    e.target.value = "";
 
     if (!file) return;
 
@@ -31,9 +29,20 @@ export default function RosterUploadButton({
         return;
       }
 
-      replaceRoster(employees);
+      const res = await fetch("/api/roster/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employees }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        onResult(data.error ?? "명단 업로드에 실패했습니다.");
+        return;
+      }
+
       onResult(
-        `명단 업데이트 완료 - 신관 ${counts.internal}명 / 외부 ${counts.external}명 / 대기 ${counts.waiting}명`
+        `명단 업데이트 완료 - 신관 ${data.counts.internal}명 / 외부 ${data.counts.external}명 / 대기 ${data.counts.waiting}명`
       );
     } catch {
       onResult("엑셀 파일을 읽는 중 오류가 발생했습니다.");

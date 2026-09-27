@@ -11,7 +11,7 @@ export default function AdminModeButton({
   onChange,
 }: {
   isAdmin: boolean;
-  onChange: (next: boolean) => void;
+  onChange: (next: boolean, password?: string) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [password, setPassword] = useState("");
@@ -36,7 +36,7 @@ export default function AdminModeButton({
       return;
     }
 
-    onChange(true);
+    onChange(true, password);
     setIsOpen(false);
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import FloorPlan, { SpotStatus } from "@/components/FloorPlan";
 import LobbyFloorPlan from "@/components/LobbyFloorPlan";
 import VacancyRegisterButton from "@/components/VacancyRegisterButton";
@@ -11,14 +11,8 @@ import AdminCancelConfirmModal from "@/components/AdminCancelConfirmModal";
 import type { LotId } from "@/lib/mockRoster";
 import { isWaitingOverrideAllowed } from "@/lib/deadline";
 
-type VacancyInfo = { name: string; pin: string }; // 빈자리 등록한 내부 배정자 정보
-type ClaimInfo = {
-  name: string;
-  type: "WAITING" | "EXTERNAL";
-  pin: string;
-}; // 그 빈자리를 신청한 사람 정보
-
-type LotState<T> = Record<LotId, Record<string, Record<number, T>>>;
+type SpotInfo = { status: SpotStatus; applicantName?: string };
+type SpotMap = Record<number, SpotInfo>;
 
 function todayString() {
   const d = new Date();
@@ -36,31 +30,50 @@ function shiftDate(dateStr: string, deltaDays: number): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-const EMPTY_LOT_STATE = { basement: {}, lobby: {} };
-
 export default function Home() {
   const [date, setDate] = useState(todayString());
 
-  // 주차장(신관/로비)별·날짜별 상태. 새로고침하면 초기화되는 임시 상태.
-  // TODO: DB 연결 시 Vacancy/Request 테이블 조회로 교체 (비밀번호는 해시로 저장해야 함)
-  const [statusesByLot, setStatusesByLot] = useState<LotState<SpotStatus>>(
-    EMPTY_LOT_STATE
-  );
-  const [vacancyByLot, setVacancyByLot] = useState<LotState<VacancyInfo>>(
-    EMPTY_LOT_STATE
-  );
-  const [claimByLot, setClaimByLot] = useState<LotState<ClaimInfo>>(
-    EMPTY_LOT_STATE
-  );
+  // 서버(DB)에서 불러온 현재 날짜 기준 자리 상태 캐시. 진짜 데이터는 DB에 있고,
+  // 여기 있는 건 화면에 그리기 위한 스냅샷 - 액션 성공 후 매번 다시 불러옴.
+  const [basementSpots, setBasementSpots] = useState<SpotMap>({});
+  const [lobbySpots, setLobbySpots] = useState<SpotMap>({});
+  const [isLoading, setIsLoading] = useState(true);
 
-  function statusesFor(lot: LotId) {
-    return statusesByLot[lot][date] ?? {};
+  const refreshSpots = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const [basementRes, lobbyRes] = await Promise.all([
+        fetch(`/api/spots?lot=basement&date=${date}`),
+        fetch(`/api/spots?lot=lobby&date=${date}`),
+      ]);
+      const basementData = await basementRes.json();
+      const lobbyData = await lobbyRes.json();
+      setBasementSpots(basementData.spots ?? {});
+      setLobbySpots(lobbyData.spots ?? {});
+    } catch {
+      setToast("서버에서 자리 정보를 불러오지 못했습니다.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [date]);
+
+  useEffect(() => {
+    refreshSpots();
+  }, [refreshSpots]);
+
+  function statusesFor(lot: LotId): Record<number, SpotStatus> {
+    const map = lot === "basement" ? basementSpots : lobbySpots;
+    return Object.fromEntries(
+      Object.entries(map).map(([num, info]) => [num, info.status])
+    );
   }
 
-  function namesFor(lot: LotId) {
-    const claims = claimByLot[lot][date] ?? {};
+  function namesFor(lot: LotId): Record<number, string> {
+    const map = lot === "basement" ? basementSpots : lobbySpots;
     return Object.fromEntries(
-      Object.entries(claims).map(([num, claim]) => [num, claim.name])
+      Object.entries(map)
+        .filter(([, info]) => info.applicantName)
+        .map(([num, info]) => [num, info.applicantName as string])
     );
   }
 
@@ -72,6 +85,7 @@ export default function Home() {
     { lot: LotId; spotNumber: number } | null
   >(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
   const [adminCancelSpot, setAdminCancelSpot] = useState<
     { lot: LotId; spotNumber: number } | null
   >(null);
@@ -83,220 +97,9 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  function setSpotStatus(
-    lot: LotId,
-    dateStr: string,
-    spotNumber: number,
-    status: SpotStatus
-  ) {
-    setStatusesByLot((prev) => ({
-      ...prev,
-      [lot]: {
-        ...prev[lot],
-        [dateStr]: { ...(prev[lot][dateStr] ?? {}), [spotNumber]: status },
-      },
-    }));
-  }
-
-  function setVacancy(
-    lot: LotId,
-    dateStr: string,
-    spotNumber: number,
-    info: VacancyInfo
-  ) {
-    setVacancyByLot((prev) => ({
-      ...prev,
-      [lot]: {
-        ...prev[lot],
-        [dateStr]: { ...(prev[lot][dateStr] ?? {}), [spotNumber]: info },
-      },
-    }));
-  }
-
-  function setClaim(
-    lot: LotId,
-    dateStr: string,
-    spotNumber: number,
-    info: ClaimInfo
-  ) {
-    setClaimByLot((prev) => ({
-      ...prev,
-      [lot]: {
-        ...prev[lot],
-        [dateStr]: { ...(prev[lot][dateStr] ?? {}), [spotNumber]: info },
-      },
-    }));
-  }
-
-  function clearClaim(lot: LotId, dateStr: string, spotNumber: number) {
-    setClaimByLot((prev) => {
-      const dayMap = { ...(prev[lot][dateStr] ?? {}) };
-      delete dayMap[spotNumber];
-      return { ...prev, [lot]: { ...prev[lot], [dateStr]: dayMap } };
-    });
-  }
-
-  // 빈자리 등록 자체를 취소 - 등록/신청 정보를 전부 지워서 완전히 원래(회색) 상태로 되돌림
-  function clearVacancy(lot: LotId, dateStr: string, spotNumber: number) {
-    setStatusesByLot((prev) => {
-      const dayMap = { ...(prev[lot][dateStr] ?? {}) };
-      delete dayMap[spotNumber];
-      return { ...prev, [lot]: { ...prev[lot], [dateStr]: dayMap } };
-    });
-    setVacancyByLot((prev) => {
-      const dayMap = { ...(prev[lot][dateStr] ?? {}) };
-      delete dayMap[spotNumber];
-      return { ...prev, [lot]: { ...prev[lot], [dateStr]: dayMap } };
-    });
-    clearClaim(lot, dateStr, spotNumber);
-  }
-
-  function isSpotRegistered(
-    spotNumber: number,
-    dateStr: string,
-    lot: LotId
-  ): boolean {
-    return statusesByLot[lot][dateStr]?.[spotNumber] !== undefined;
-  }
-
-  function handleRegister(
-    spotNumber: number,
-    name: string,
-    dates: string[],
-    pin: string,
-    lot: LotId
-  ) {
-    dates.forEach((d) => {
-      setSpotStatus(lot, d, spotNumber, "vacant");
-      setVacancy(lot, d, spotNumber, { name, pin });
-    });
-    const lotLabel = lot === "lobby" ? "로비" : "신관";
-    console.log(
-      `${name}님의 ${lotLabel} ${spotNumber}번 자리를 ${dates[0]}~${
-        dates[dates.length - 1]
-      }에 등록함`
-    );
-    setToast(
-      dates.length === 1
-        ? `${dates[0]} ${lotLabel} ${spotNumber}번 자리가 등록됐어요!`
-        : `${dates[0]}~${dates[dates.length - 1]} ${lotLabel} ${spotNumber}번 자리가 등록됐어요!`
-    );
-  }
-
-  function handleClaim({
-    spotNumber,
-    name,
-    type,
-    pin,
-  }: {
-    spotNumber: number;
-    name: string;
-    type: "WAITING" | "EXTERNAL";
-    pin: string;
-  }): { success: boolean; error?: string } {
-    if (!selectedSpot) {
-      return { success: false, error: "신청할 자리가 선택되지 않았습니다" };
-    }
-    const lot = selectedSpot.lot;
-    // 모달을 연 시점 이후로 다른 사람이 먼저 채갔을 수 있으니 최신 상태로 다시 확인
-    const currentStatus = statusesByLot[lot][date]?.[spotNumber];
-
-    if (type === "EXTERNAL") {
-      // 외부 배정자는 자리가 여전히 빈자리(vacant)일 때만 신청 가능
-      if (currentStatus !== "vacant") {
-        return { success: false, error: "이미 신청된 자리입니다" };
-      }
-      setSpotStatus(lot, date, spotNumber, "claimed_external");
-    } else {
-      // 대기자는 빈자리이거나, 외부배정자가 신청한 자리를 가로챌 수 있음
-      // 단, 이미 대기자가 확정된 자리는 안 됨
-      if (currentStatus !== "vacant" && currentStatus !== "claimed_external") {
-        return { success: false, error: "이미 신청된 자리입니다" };
-      }
-      // 대기자 우선예약(외부배정자가 신청한 자리에 대신 신청하는 것)은 전날 16:00까지만 가능
-      if (
-        currentStatus === "claimed_external" &&
-        !isWaitingOverrideAllowed(date)
-      ) {
-        return {
-          success: false,
-          error: "대기자 우선예약은 전날 16:00까지만 가능합니다",
-        };
-      }
-      setSpotStatus(lot, date, spotNumber, "claimed_waiting");
-    }
-    setClaim(lot, date, spotNumber, { name, type, pin });
-
-    console.log(`${name}(${type})님이 ${lot} ${spotNumber}번을 ${date}에 신청함`);
-    setToast(`${name}님, ${spotNumber}번 자리가 예약됐어요!`);
-    setSelectedSpot(null);
-    return { success: true };
-  }
-
-  function handleCancel(pin: string): { success: boolean; error?: string } {
-    if (cancelSpot === null) {
-      return { success: false, error: "취소할 자리가 선택되지 않았습니다" };
-    }
-
-    const { lot, spotNumber } = cancelSpot;
-    const status = statusesByLot[lot][date]?.[spotNumber];
-
-    if (status === "claimed_external" || status === "claimed_waiting") {
-      // 파랑/보라: 신청자 비밀번호로 확인 -> 신청만 취소, 등록은 남아서 초록(빈자리)으로 돌아감
-      const claim = claimByLot[lot][date]?.[spotNumber];
-      if (!claim) {
-        return { success: false, error: "신청 정보를 찾을 수 없습니다" };
-      }
-      if (pin !== claim.pin) {
-        return { success: false, error: "비밀번호가 일치하지 않습니다" };
-      }
-      setSpotStatus(lot, date, spotNumber, "vacant");
-      clearClaim(lot, date, spotNumber);
-      setToast(`${spotNumber}번 (${date}) 신청이 취소되어 다시 빈자리가 됐어요.`);
-      setCancelSpot(null);
-      return { success: true };
-    }
-
-    if (status === "vacant") {
-      // 초록: 등록자 비밀번호로 확인 -> 등록 자체를 취소, 회색(미등록)으로 완전히 되돌림
-      const vacancy = vacancyByLot[lot][date]?.[spotNumber];
-      if (!vacancy) {
-        return { success: false, error: "등록 정보를 찾을 수 없습니다" };
-      }
-      if (pin !== vacancy.pin) {
-        return { success: false, error: "비밀번호가 일치하지 않습니다" };
-      }
-      clearVacancy(lot, date, spotNumber);
-      setToast(`${spotNumber}번 (${date}) 빈자리 등록이 취소됐어요.`);
-      setCancelSpot(null);
-      return { success: true };
-    }
-
-    return { success: false, error: "취소할 수 있는 자리가 아닙니다" };
-  }
-
-  // 관리자 모드: 비밀번호 확인 없이 등록/신청 전부 취소 가능
-  function handleAdminCancel() {
-    if (!adminCancelSpot) return;
-    const { lot, spotNumber } = adminCancelSpot;
-    const status = statusesByLot[lot][date]?.[spotNumber];
-
-    if (status === "claimed_external" || status === "claimed_waiting") {
-      setSpotStatus(lot, date, spotNumber, "vacant");
-      clearClaim(lot, date, spotNumber);
-      setToast(
-        `[관리자] ${spotNumber}번 (${date}) 신청이 취소되어 다시 빈자리가 됐어요.`
-      );
-    } else if (status === "vacant") {
-      clearVacancy(lot, date, spotNumber);
-      setToast(`[관리자] ${spotNumber}번 (${date}) 빈자리 등록이 취소됐어요.`);
-    }
-    setAdminCancelSpot(null);
-  }
-
   function handleSpotClick(lot: LotId, spotNumber: number) {
     if (isAdmin) {
-      const status = statusesByLot[lot][date]?.[spotNumber];
+      const status = statusesFor(lot)[spotNumber];
       if (status !== undefined) {
         setAdminCancelSpot({ lot, spotNumber });
       }
@@ -308,7 +111,7 @@ export default function Home() {
       return;
     }
 
-    const status = statusesByLot[lot][date]?.[spotNumber];
+    const status = statusesFor(lot)[spotNumber];
 
     // 파랑(외부배정자 신청됨) 자리는 마감(전날 16:00) 지나면 클릭은 되지만
     // 신청 모달 대신 안내 토스트만 뜨고 실제 신청은 진행되지 않음
@@ -369,23 +172,35 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-2">
-          <VacancyRegisterButton
-            defaultDate={date}
-            isSpotRegistered={isSpotRegistered}
-            onRegister={handleRegister}
+          {!isAdmin && (
+            <>
+              <VacancyRegisterButton
+                defaultDate={date}
+                onRegistered={() => {
+                  refreshSpots();
+                  setToast("자리가 등록됐어요!");
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setCancelMode((prev) => !prev)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
+                  cancelMode
+                    ? "bg-[#6022A7] border-[#6022A7] text-white hover:bg-[#4f1c89]"
+                    : "bg-white border-gray-300 text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                {cancelMode ? "취소 모드 끄기" : "등록/신청 취소"}
+              </button>
+            </>
+          )}
+          <AdminModeButton
+            isAdmin={isAdmin}
+            onChange={(next, password) => {
+              setIsAdmin(next);
+              if (password) setAdminPassword(password);
+            }}
           />
-          <button
-            type="button"
-            onClick={() => setCancelMode((prev) => !prev)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
-              cancelMode
-                ? "bg-[#6022A7] border-[#6022A7] text-white hover:bg-[#4f1c89]"
-                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-100"
-            }`}
-          >
-            {cancelMode ? "취소 모드 끄기" : "등록/신청 취소"}
-          </button>
-          <AdminModeButton isAdmin={isAdmin} onChange={setIsAdmin} />
         </div>
       </div>
 
@@ -494,37 +309,59 @@ export default function Home() {
       {selectedSpot !== null && (
         <SpotClaimModal
           date={date}
+          lot={selectedSpot.lot}
           spotNumber={selectedSpot.spotNumber}
           waitingOnly={
             statusesFor(selectedSpot.lot)[selectedSpot.spotNumber] ===
             "claimed_external"
           }
           onClose={() => setSelectedSpot(null)}
-          onClaim={handleClaim}
+          onClaimed={() => {
+            refreshSpots();
+            setToast(`${selectedSpot.spotNumber}번 자리가 예약됐어요!`);
+            setSelectedSpot(null);
+          }}
         />
       )}
 
       {cancelSpot !== null && (
         <CancelModal
           date={date}
+          lot={cancelSpot.lot}
           spotNumber={cancelSpot.spotNumber}
           onClose={() => setCancelSpot(null)}
-          onCancel={handleCancel}
+          onCancelled={() => {
+            refreshSpots();
+            setToast(`${cancelSpot.spotNumber}번 자리의 등록/신청이 취소됐어요.`);
+            setCancelSpot(null);
+          }}
         />
       )}
 
       {adminCancelSpot !== null && (
         <AdminCancelConfirmModal
           date={date}
+          lot={adminCancelSpot.lot}
           spotNumber={adminCancelSpot.spotNumber}
+          adminPassword={adminPassword}
           onClose={() => setAdminCancelSpot(null)}
-          onConfirm={handleAdminCancel}
+          onCancelled={() => {
+            refreshSpots();
+            setToast(`[관리자] ${adminCancelSpot.spotNumber}번 자리가 취소됐어요.`);
+            setAdminCancelSpot(null);
+          }}
         />
       )}
 
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm px-4 py-3 rounded-lg shadow-lg z-50">
           {toast}
+        </div>
+      )}
+
+      {isLoading && (
+        <div className="fixed top-4 right-4 text-xs text-gray-400">
+          불러오는 중...
         </div>
       )}
     </main>
