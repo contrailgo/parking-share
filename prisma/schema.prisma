@@ -33,7 +33,8 @@ model RosterVersion {
 }
 
 // 임직원 명단. 특정 RosterVersion에 속함 - 같은 사람이 버전마다 다른 자리를 가질 수 있음.
-// 로비(lot="lobby") 명단은 엑셀에 없는 정보라, 모든 버전에 동일하게 복사되어 들어감.
+// 로비(lot="lobby") 플레이스홀더 명단은 엑셀에 없는 정보라, 모든 버전에 복사되어 들어가되
+// Executive가 차지한 자리 번호는 제외됨 (겹치지 않게).
 model Employee {
   id              String        @id @default(cuid())
   name            String
@@ -46,6 +47,20 @@ model Employee {
   updatedAt       DateTime      @updatedAt
 
   @@unique([rosterVersionId, name])
+}
+
+// 임원 명단. RosterVersion(날짜별 버전)과 완전히 무관하게 "항상 현재 상태"로만 관리됨.
+// data/임원_명단.xlsx (날짜 없는 파일) 하나를 통째로 교체하는 방식.
+// 이름 조회 시 RosterVersion보다 먼저 확인해서, 날짜와 무관하게 항상 우선 적용됨.
+model Executive {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  lot        LotId
+  spotNumber Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([lot, spotNumber])
 }
 
 // 특정 주차장(lot)·자리(spotNumber)·날짜(date)에 대한 "빈자리 등록".

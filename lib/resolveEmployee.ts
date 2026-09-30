@@ -16,9 +16,24 @@ export async function resolveRosterVersion(date: string) {
   });
 }
 
-// 특정 날짜 기준으로 적용되는 명단 버전에서 이름으로 직원을 찾음.
-// register/claim API가 이걸 통해 "그 예약 날짜 시점에 유효했던 명단"으로 확인함.
+// 이름으로 직원을 찾음. 날짜(date)는 일반 명단(RosterVersion) 조회에만 쓰이고,
+// 임원(Executive)은 날짜와 무관하게 항상 최우선으로 확인함 - 임원 명단은
+// 반기별 명단 교체 주기와 별개로 관리되기 때문.
 export async function findEmployeeForDate(name: string, date: string) {
+  const trimmed = name.trim();
+
+  const executive = await prisma.executive.findUnique({
+    where: { name: trimmed },
+  });
+  if (executive) {
+    return {
+      name: executive.name,
+      type: "INTERNAL" as const,
+      lot: executive.lot,
+      spotNumber: executive.spotNumber,
+    };
+  }
+
   const version = await resolveRosterVersion(date);
   if (!version) return null;
 
@@ -26,7 +41,7 @@ export async function findEmployeeForDate(name: string, date: string) {
     where: {
       rosterVersionId_name: {
         rosterVersionId: version.id,
-        name: name.trim(),
+        name: trimmed,
       },
     },
   });
